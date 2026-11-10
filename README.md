@@ -63,9 +63,12 @@ Handloom provides an integrated, audit-compliant digital backbone supporting **1
 
 ```text
 handloom/
+├── .agents/                   # Antigravity AI rules and workflow skills
 ├── .github/
-│   └── workflows/
-│       └── ci.yml             # GitHub Actions automated CI workflow
+│   ├── ISSUE_TEMPLATE/        # Standardized bug report and feature request templates
+│   ├── workflows/
+│   │   └── ci.yml             # GitHub Actions automated CI workflow
+│   └── pull_request_template.md # Comprehensive pull request review template
 ├── apps/
 │   ├── api/                   # NestJS REST API application
 │   │   ├── src/
@@ -89,7 +92,10 @@ handloom/
 │   ├── API_STANDARDS.md       # REST conventions, envelopes & OpenAPI rules
 │   ├── SECURITY.md            # Authentication, RBAC, RLS & secrets management
 │   ├── SCALABILITY.md         # 1k-10k concurrent user architecture & SLOs
-│   ├── DEVELOPMENT_WORKFLOW.md# Git workflow, PR reviews & Conventional Commits
+│   ├── GIT_WORKFLOW.md        # Git branching, branch protection & collaboration
+│   ├── DEVELOPMENT_WORKFLOW.md# 10-step development workflow & Conventional Commits
+│   ├── CODE_REVIEW.md         # 10 review dimensions & pull request governance
+│   ├── AI_DEVELOPMENT.md      # AI development protocol & prompt specifications
 │   └── TESTING.md             # Testing tiers, Supertest e2e & completion checklist
 ├── AGENTS.md                  # Mandatory directives for AI coding agents
 ├── .env.example               # Sanitized environment variable template
@@ -182,7 +188,7 @@ All commits follow the **Conventional Commits** standard:
 - `test(...)`: Unit or E2E tests
 - `chore(...)`: Configuration or dependencies
 
-Force-pushing (`git push -f`) and committing credentials are strictly prohibited. See [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for full details.
+Force-pushing (`git push -f`) and committing credentials are strictly prohibited. See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md) and [docs/DEVELOPMENT_WORKFLOW.md](docs/DEVELOPMENT_WORKFLOW.md) for full details on branching conventions, protected branch settings, and the [Pull Request Template](.github/pull_request_template.md).
 
 ---
 

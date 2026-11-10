@@ -12,29 +12,17 @@ Never combine multiple distinct architectural phases into an unverified mega-com
 
 ## 2. Branching Strategy
 
-```mermaid
-gitGraph
-   commit id: "v0.1.0"
-   branch develop
-   checkout develop
-   commit id: "task-8.1.1"
-   commit id: "task-8.1.2"
-   branch feature/catalog-engine
-   checkout feature/catalog-engine
-   commit id: "schema-specs"
-   commit id: "catalog-service"
-   checkout develop
-   merge feature/catalog-engine id: "merge-catalog"
-   checkout main
-   merge develop id: "release-v0.2.0" tag: "v0.2.0"
-```
+Our core strategy is simple, lean, and avoids unnecessary permanent branches:
 
-### Branch Roles
+- **`main`:** Stable, reviewed, and production-ready code.
+- **`feature/<short-description>`:** New business capabilities or domain modules.
+- **`fix/<short-description>`:** Normal bug fixes and defect resolutions.
+- **`hotfix/<short-description>`:** Urgent production hotfixes.
+- **`chore/<short-description>`:** Infrastructure, tooling, and maintenance.
+- **`docs/<short-description>`:** Documentation-only changes.
+- **`release/<version>`:** Optional release preparation and version tagging.
 
-1. **`main`:** The production branch. Must always be deployable, with all CI checks passing.
-2. **`develop`:** Integration branch for ongoing sprint tasks.
-3. **`feature/<task-name>`:** Topic branches branched from `develop` for specific tasks (e.g., `feature/task-8.1.4-catalog-inventory`).
-4. **`hotfix/<fix-name>`:** Emergency fixes branched directly from `main` and merged back into both `main` and `develop`.
+For exhaustive branching lifecycle, protected-branch rules, and pull request procedures, see [docs/GIT_WORKFLOW.md](./GIT_WORKFLOW.md).
 
 ---
 
