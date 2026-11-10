@@ -54,8 +54,8 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  const port = process.env['PORT'] || 4000;
-  await app.listen(port);
+  const port = Number(process.env['PORT']) || 4000;
+  await app.listen(port, '0.0.0.0');
   logger.info(
     `[Handloom API] Server listening on port ${port} with prefix ${apiPrefix}`,
   );

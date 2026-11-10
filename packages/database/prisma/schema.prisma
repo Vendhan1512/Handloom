@@ -1,8 +1,8 @@
 // ==============================================================================
-// HANDLOOM PLATFORM - DATABASE SCHEMA FOUNDATION
+// HANDLOOM OPERATIONS PLATFORM - MULTI-TENANT DATABASE SCHEMA
 // ==============================================================================
-// Note: Multi-tenant domain tables (Customers, Orders, Yarn Inventory, Looms,
-// Wages) will be introduced in subsequent phase-specific migration tasks.
+// This schema establishes tenant isolation (cooperatives/clusters/mills),
+// role-based users, cryptographically rotated sessions, and audit logging.
 // ==============================================================================
 
 generator client {
@@ -14,14 +14,134 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ------------------------------------------------------------------------------
+// ENUMS
+// ------------------------------------------------------------------------------
+
+enum TenantType {
+  COOPERATIVE
+  PRIVATE_MILL
+  MASTER_WEAVER_CLUSTER
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  SOCIETY_ADMIN
+  SUPERVISOR
+  MASTER_WEAVER
+  WEAVER
+  INSPECTOR
+  ACCOUNTANT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ------------------------------------------------------------------------------
+// MULTI-TENANT MODELS
+// ------------------------------------------------------------------------------
+
+/// Handloom cooperative society, mill, or master weaver cluster
+model Tenant {
+  id           String       @id @default(uuid())
+  name         String
+  code         String       @unique /// Unique business code e.g. "KANCHI-01"
+  type         TenantType   @default(COOPERATIVE)
+  status       TenantStatus @default(ACTIVE)
+  contactEmail String?      @map("contact_email")
+  contactPhone String?      @map("contact_phone")
+  address      String?
+  settings     Json?        /// Tenant-specific configuration (e.g. piece rates, tax rules)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  users     User[]
+  auditLogs AuditLog[]
+
+  @@map("tenants")
+}
+
+/// System user linked to a tenant with strictly enforced RBAC
+model User {
+  id           String     @id @default(uuid())
+  tenantId     String     @map("tenant_id")
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String
+  phone        String?
+  passwordHash String     @map("password_hash")
+  firstName    String     @map("first_name")
+  lastName     String     @map("last_name")
+  role         UserRole   @default(WEAVER)
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?  @map("last_login_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  sessions  Session[]
+  auditLogs AuditLog[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+/// Cryptographically rotated refresh token sessions
+model Session {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String    @unique @map("token_hash")
+  userAgent  String?   @map("user_agent")
+  ipAddress  String?   @map("ip_address")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("sessions")
+}
+
+/// Comprehensive, non-repudiation audit trail
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String?  @map("user_id")
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String   /// e.g. "AUTH_LOGIN", "AUTH_REGISTER_SOCIETY", "USER_CREATE"
+  entity    String   /// e.g. "User", "Tenant", "Session"
+  entityId  String?  @map("entity_id")
+  details   Json?    /// Contextual metadata regarding the action
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
 /// Baseline system health and version synchronization model
 model SystemHealth {
   id        String   @id @default(uuid())
   version   String
   status    String   @default("HEALTHY")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("system_health")
 }
-
