@@ -115,3 +115,18 @@ Upon completion of any implementation or maintenance turn, the AI agent must pro
 3. **Actual Results:** Raw summary of test pass counts, build durations, and diagnostic status (never synthetic or assumed results).
 4. **Git Metadata:** Commit hash, commit message, and branch push confirmation.
 5. **Unresolved Issues / Next Steps:** Any discovered bugs, technical debt, or recommended subsequent tasks.
+
+---
+
+## 5. Domain Directives & Governance References
+
+AI agents must consult the following specialized governance files for domain-specific rules:
+
+- **Backend Engineering Rules:** [`.agents/rules/backend.md`](.agents/rules/backend.md)
+- **Frontend Engineering Rules:** [`.agents/rules/frontend.md`](.agents/rules/frontend.md)
+- **Database Engineering Rules:** [`.agents/rules/database.md`](.agents/rules/database.md)
+- **Security Engineering Rules:** [`.agents/rules/security.md`](.agents/rules/security.md)
+- **AI Automation & Safety Rules:** [`.agents/rules/ai.md`](.agents/rules/ai.md)
+- **Code Review Governance:** [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md)
+- **AI Development Protocols:** [`docs/AI_DEVELOPMENT.md`](docs/AI_DEVELOPMENT.md)
+- **Handloom Domain Business Rules:** [`docs/BUSINESS_RULES.md`](docs/BUSINESS_RULES.md)
