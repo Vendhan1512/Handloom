@@ -1,0 +1,26 @@
+// ==============================================================================
+// HANDLOOM PLATFORM - DATABASE SCHEMA FOUNDATION
+// ==============================================================================
+// Note: Multi-tenant domain tables (Customers, Orders, Yarn Inventory, Looms,
+// Wages) will be introduced in subsequent phase-specific migration tasks.
+// ==============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Baseline system health and version synchronization model
+model SystemHealth {
+  id        String   @id @default(uuid())
+  version   String
+  status    String   @default("HEALTHY")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_health")
+}

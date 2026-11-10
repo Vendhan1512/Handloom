@@ -1,0 +1,14 @@
+{
+  "name": "@handloom/config",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "eslint",
+    "prettier",
+    "typescript"
+  ],
+  "scripts": {
+    "lint": "echo \"@handloom/config lint skipped\"",
+    "typecheck": "echo \"@handloom/config typecheck skipped\""
+  }
+}

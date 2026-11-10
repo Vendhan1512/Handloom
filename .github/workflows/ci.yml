@@ -1,0 +1,88 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Lint, Typecheck, Test & Build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: handloom_test
+          POSTGRES_PASSWORD: handloom_test_password
+          POSTGRES_DB: handloom_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
+      - name: Get pnpm store directory
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${ runner.os }}-pnpm-store-
+
+      - name: Install Workspace Dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Generate Prisma Client
+        run: pnpm db:generate
+        env:
+          DATABASE_URL: postgresql://handloom_test:handloom_test_password@localhost:5432/handloom_test_db?schema=public
+
+      - name: Run Linting
+        run: pnpm lint
+
+      - name: Run Type Checking
+        run: pnpm typecheck
+
+      - name: Run Unit Tests
+        run: pnpm test
+
+      - name: Run Production Builds
+        run: pnpm build
