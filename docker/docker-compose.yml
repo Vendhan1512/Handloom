@@ -47,3 +47,4 @@ volumes:
     name: handloom_postgres_data
   redis_data:
     name: handloom_redis_data
+

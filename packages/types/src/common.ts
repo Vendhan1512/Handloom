@@ -38,3 +38,4 @@ export interface HealthCheckResponse {
     redis: 'connected' | 'disconnected' | 'unconfigured';
   };
 }
+

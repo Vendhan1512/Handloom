@@ -68,3 +68,4 @@ bootstrap().catch((err) => {
   logger.error({ err }, 'Fatal error during NestJS API bootstrap');
   process.exit(1);
 });
+

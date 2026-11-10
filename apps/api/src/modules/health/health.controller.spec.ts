@@ -42,3 +42,4 @@ describe('HealthController', () => {
     expect(service.getHealth).toHaveBeenCalled();
   });
 });
+

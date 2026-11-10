@@ -58,3 +58,4 @@ graph TD
    * Inventory allocations will use atomic ledger inserts with optimistic locking (`version` field) to avoid hot-row lock contention across high-throughput looms.
 4. **Multi-Tenant Isolation:**
    * Data segregation is enforced at the database level utilizing PostgreSQL Row-Level Security (RLS) linked to the active session `tenant_id`.
+
