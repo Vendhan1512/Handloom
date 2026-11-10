@@ -24,8 +24,12 @@ pnpm-debug.log*
 # Environment
 .env
 .env.local
+.env.*.local
 .env.development.local
 .env.test.local
+.env.staging
+.env.staging.local
+.env.production
 .env.production.local
 
 # Turborepo

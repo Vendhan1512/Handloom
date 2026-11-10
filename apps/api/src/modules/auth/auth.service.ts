@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
+import { AppConfigService } from '../../config/app-config.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { prisma } from '@handloom/database';
@@ -35,14 +35,11 @@ export class AuthService {
 
   constructor(
     private readonly jwtService: JwtService,
-    private readonly configService: ConfigService,
+    private readonly configService: AppConfigService,
   ) {
-    this.jwtSecret =
-      this.configService.get<string>('JWT_SECRET') ||
-      'handloom_default_secret_key_change_in_production_32chars';
-    this.jwtExpiresIn = this.configService.get<string>('JWT_EXPIRES_IN') || '15m';
-    this.refreshExpiresIn =
-      this.configService.get<string>('REFRESH_TOKEN_EXPIRES_IN') || '7d';
+    this.jwtSecret = this.configService.jwt.secret;
+    this.jwtExpiresIn = this.configService.jwt.expiresIn;
+    this.refreshExpiresIn = this.configService.jwt.refreshExpiresIn;
   }
 
   async registerSociety(

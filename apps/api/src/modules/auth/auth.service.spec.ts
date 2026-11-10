@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
+import { AppConfigService } from '../../config/app-config.service';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { prisma } from '@handloom/database';
@@ -48,14 +48,14 @@ describe('AuthService', () => {
           },
         },
         {
-          provide: ConfigService,
+          provide: AppConfigService,
           useValue: {
-            get: jest.fn((key: string) => {
-              if (key === 'JWT_SECRET') return 'test_secret_key_32_characters_long';
-              if (key === 'JWT_EXPIRES_IN') return '15m';
-              if (key === 'REFRESH_TOKEN_EXPIRES_IN') return '7d';
-              return null;
-            }),
+            jwt: {
+              secret: 'test_secret_key_32_characters_long',
+              expiresIn: '15m',
+              refreshSecret: 'test_refresh_secret_32_characters_long',
+              refreshExpiresIn: '7d',
+            },
           },
         },
       ],
