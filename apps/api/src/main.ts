@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { AppConfigService } from './config/app-config.service';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -21,6 +22,9 @@ async function bootstrap() {
   // API Version Prefix from centralized configuration
   const apiPrefix = configService.apiPrefix;
   app.setGlobalPrefix(apiPrefix.replace(/^\//, ''));
+
+  // Cookie Parser for secure HttpOnly session cookies
+  app.use(cookieParser());
 
   // Global Interceptors & Filters
   app.useGlobalPipes(

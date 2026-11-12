@@ -1,8 +1,9 @@
 // ==============================================================================
 // HANDLOOM OPERATIONS PLATFORM - MULTI-TENANT DATABASE SCHEMA
 // ==============================================================================
-// This schema establishes tenant isolation (cooperatives/clusters/mills),
-// role-based users, cryptographically rotated sessions, and audit logging.
+// This schema establishes decoupled tenant memberships (cooperatives/clusters/mills),
+// global user identities, role-based access control, cryptographically rotated sessions,
+// and comprehensive audit logging.
 // ==============================================================================
 
 generator client {
@@ -32,12 +33,25 @@ enum TenantStatus {
 
 enum UserRole {
   SUPER_ADMIN
-  SOCIETY_ADMIN
+  OWNER
+  ADMIN
+  OFFICE_STAFF
+  STOREKEEPER
   SUPERVISOR
-  MASTER_WEAVER
   WEAVER
-  INSPECTOR
+  QUALITY_INSPECTOR
   ACCOUNTANT
+  TRANSPORT_STAFF
+  // Backward-compatibility aliases
+  SOCIETY_ADMIN
+  MASTER_WEAVER
+  INSPECTOR
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
 }
 
 enum UserStatus {
@@ -65,8 +79,8 @@ model Tenant {
   createdAt    DateTime     @default(now()) @map("created_at")
   updatedAt    DateTime     @updatedAt @map("updated_at")
 
-  users     User[]
-  auditLogs AuditLog[]
+  memberships TenantMembership[]
+  auditLogs   AuditLog[]
 
   @@index([status])
   @@index([code])
@@ -74,58 +88,79 @@ model Tenant {
   @@map("tenants")
 }
 
-/// System user linked to a tenant with strictly enforced RBAC
+/// Global user identity for authentication across societies/clusters
 model User {
   id           String     @id @default(uuid())
-  tenantId     String     @map("tenant_id")
-  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  email        String
+  email        String     @unique /// Globally unique user login email
   phone        String?
   passwordHash String     @map("password_hash")
   firstName    String     @map("first_name")
   lastName     String     @map("last_name")
-  role         UserRole   @default(WEAVER)
   status       UserStatus @default(ACTIVE)
   lastLoginAt  DateTime?  @map("last_login_at")
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
-  sessions  Session[]
-  auditLogs AuditLog[]
+  memberships TenantMembership[]
+  sessions    Session[]
+  auditLogs   AuditLog[]
 
-  @@unique([tenantId, email])
-  @@index([tenantId])
   @@index([email])
-  @@index([role])
+  @@index([status])
   @@map("users")
 }
 
-/// Cryptographically rotated refresh token sessions
+/// Tenant membership linking global user identity to a tenant with specific RBAC role
+model TenantMembership {
+  id        String           @id @default(uuid())
+  tenantId  String           @map("tenant_id")
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String           @map("user_id")
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      UserRole         @default(WEAVER)
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+  @@index([userId])
+  @@index([role])
+  @@index([status])
+  @@map("tenant_memberships")
+}
+
+/// Cryptographically rotated refresh token sessions with family reuse detection
 model Session {
-  id         String    @id @default(uuid())
-  userId     String    @map("user_id")
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash  String    @unique @map("token_hash")
-  userAgent  String?   @map("user_agent")
-  ipAddress  String?   @map("ip_address")
-  expiresAt  DateTime  @map("expires_at")
-  revokedAt  DateTime? @map("revoked_at")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeTenantId  String?   @map("active_tenant_id")
+  tokenHash       String    @unique @map("token_hash")
+  familyId        String    @default(uuid()) @map("family_id")
+  parentTokenHash String?   @map("parent_token_hash")
+  isRevoked       Boolean   @default(false) @map("is_revoked")
+  userAgent       String?   @map("user_agent")
+  ipAddress       String?   @map("ip_address")
+  expiresAt       DateTime  @map("expires_at")
+  revokedAt       DateTime? @map("revoked_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
   @@index([userId])
   @@index([tokenHash])
+  @@index([familyId])
   @@map("sessions")
 }
 
 /// Comprehensive, non-repudiation audit trail
 model AuditLog {
   id        String   @id @default(uuid())
-  tenantId  String   @map("tenant_id")
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenantId  String?  @map("tenant_id")
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId    String?  @map("user_id")
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  action    String   /// e.g. "AUTH_LOGIN", "AUTH_REGISTER_SOCIETY", "USER_CREATE"
-  entity    String   /// e.g. "User", "Tenant", "Session"
+  action    String   /// e.g. "AUTH_LOGIN", "AUTH_REGISTER_SOCIETY", "AUTH_REFRESH_TOKEN_REUSE"
+  entity    String   /// e.g. "User", "Tenant", "Session", "TenantMembership"
   entityId  String?  @map("entity_id")
   details   Json?    /// Contextual metadata regarding the action
   ipAddress String?  @map("ip_address")

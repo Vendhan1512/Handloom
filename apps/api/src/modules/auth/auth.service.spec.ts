@@ -1,11 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { AppConfigService } from '../../config/app-config.service';
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { AuthService } from './auth.service';
+import { PasswordHasherService } from './services/password-hasher.service';
+import { AppConfigService } from '../../config/app-config.service';
 import { prisma } from '@handloom/database';
-import { TenantType, UserRole, UserStatus } from '@handloom/types';
-import * as bcrypt from 'bcryptjs';
+import {
+  MembershipStatus,
+  Permission,
+  TenantType,
+  UserRole,
+  UserStatus,
+} from '@handloom/types';
 
 jest.mock('@handloom/database', () => ({
   prisma: {
@@ -19,8 +25,16 @@ jest.mock('@handloom/database', () => ({
       create: jest.fn(),
       update: jest.fn(),
     },
+    tenantMembership: {
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+    },
     session: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
@@ -35,6 +49,7 @@ jest.mock('@handloom/database', () => ({
 describe('AuthService', () => {
   let service: AuthService;
   let jwtService: JwtService;
+  let passwordHasher: PasswordHasherService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -51,11 +66,18 @@ describe('AuthService', () => {
           provide: AppConfigService,
           useValue: {
             jwt: {
-              secret: 'test_secret_key_32_characters_long',
+              secret: 'test_secret_key_32_characters_long_min',
               expiresIn: '15m',
               refreshSecret: 'test_refresh_secret_32_characters_long',
               refreshExpiresIn: '7d',
             },
+          },
+        },
+        {
+          provide: PasswordHasherService,
+          useValue: {
+            hash: jest.fn().mockResolvedValue('$argon2id$v=19$m=19456,t=2,p=1$mockedargon2hash'),
+            verify: jest.fn(),
           },
         },
       ],
@@ -63,6 +85,7 @@ describe('AuthService', () => {
 
     service = module.get<AuthService>(AuthService);
     jwtService = module.get<JwtService>(JwtService);
+    passwordHasher = module.get<PasswordHasherService>(PasswordHasherService);
     jest.clearAllMocks();
   });
 
@@ -72,95 +95,388 @@ describe('AuthService', () => {
 
   describe('registerSociety', () => {
     const dto = {
-      societyName: 'Salem Silk Weavers',
+      societyName: 'Salem Silk Weavers Co-op',
       societyCode: 'SALEM-01',
       societyType: TenantType.COOPERATIVE,
       adminEmail: 'admin@salem.org',
-      adminPassword: 'Password@123',
+      adminPassword: 'SecurePassword#2026',
       adminFirstName: 'Kavitha',
       adminLastName: 'Raman',
     };
 
-    it('should throw ConflictException if society code already exists', async () => {
-      (prisma.tenant.findUnique as jest.Mock).mockResolvedValue({ id: 'existing-id' });
+    it('should throw ConflictException if society code already registered', async () => {
+      (prisma.tenant.findUnique as jest.Mock).mockResolvedValue({ id: 'existing-tenant-id' });
 
       await expect(service.registerSociety(dto)).rejects.toThrow(ConflictException);
     });
 
-    it('should register society and return user and tokens', async () => {
+    it('should register tenant, user and OWNER membership in a transaction and return tokens', async () => {
       (prisma.tenant.findUnique as jest.Mock).mockResolvedValue(null);
       (prisma.$transaction as jest.Mock).mockImplementation(async (callback) => {
         return callback({
           tenant: {
             create: jest.fn().mockResolvedValue({
-              id: 'tenant-123',
+              id: 'tenant-salem-1',
               name: dto.societyName,
               code: dto.societyCode,
             }),
           },
           user: {
+            findUnique: jest.fn().mockResolvedValue(null),
             create: jest.fn().mockResolvedValue({
-              id: 'user-123',
+              id: 'user-admin-1',
               email: dto.adminEmail,
               firstName: dto.adminFirstName,
               lastName: dto.adminLastName,
-              role: UserRole.SOCIETY_ADMIN,
+            }),
+          },
+          tenantMembership: {
+            create: jest.fn().mockResolvedValue({
+              id: 'membership-1',
+              role: UserRole.OWNER,
+              status: MembershipStatus.ACTIVE,
             }),
           },
           auditLog: {
-            create: jest.fn().mockResolvedValue({ id: 'audit-123' }),
+            create: jest.fn().mockResolvedValue({ id: 'audit-log-1' }),
           },
         });
       });
-      (prisma.session.create as jest.Mock).mockResolvedValue({ id: 'session-123' });
+      (prisma.session.create as jest.Mock).mockResolvedValue({ id: 'session-1' });
 
       const result = await service.registerSociety(dto);
 
       expect(result.user.email).toBe(dto.adminEmail);
-      expect(result.user.role).toBe(UserRole.SOCIETY_ADMIN);
+      expect(result.user.role).toBe(UserRole.OWNER);
+      expect(result.user.tenantCode).toBe(dto.societyCode);
       expect(result.tokens.accessToken).toBe('mock-jwt-token');
+      expect(result.tokens.refreshToken).toBeDefined();
     });
   });
 
   describe('login', () => {
-    it('should throw UnauthorizedException if user is not found', async () => {
-      (prisma.user.findFirst as jest.Mock).mockResolvedValue(null);
+    const mockTenant = {
+      id: 'tenant-1',
+      name: 'Kanchipuram Silk Co-op',
+      code: 'KANCHI-01',
+      status: 'ACTIVE',
+    };
+
+    const mockMembership = {
+      id: 'membership-1',
+      tenantId: 'tenant-1',
+      role: UserRole.OWNER,
+      status: MembershipStatus.ACTIVE,
+      createdAt: new Date(),
+      tenant: mockTenant,
+    };
+
+    const mockUser = {
+      id: 'user-1',
+      email: 'owner@kanchi.org',
+      passwordHash: '$argon2id$v=19$m=19456,t=2,p=1$argonhash',
+      firstName: 'Arun',
+      lastName: 'Kumar',
+      status: UserStatus.ACTIVE,
+      memberships: [mockMembership],
+    };
+
+    it('should throw UnauthorizedException if user does not exist', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
 
       await expect(
-        service.login({ email: 'unknown@test.com', password: 'password' }),
+        service.login({ email: 'nonexistent@test.com', password: 'password' }),
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should authenticate user and return tokens when credentials match', async () => {
-      const password = 'Password@123';
-      const passwordHash = await bcrypt.hash(password, 10);
-      const mockUser = {
-        id: 'user-123',
-        email: 'test@weaver.org',
-        passwordHash,
-        firstName: 'Murugan',
-        lastName: 'P',
-        role: UserRole.WEAVER,
-        status: UserStatus.ACTIVE,
-        tenantId: 'tenant-123',
-        tenant: {
-          id: 'tenant-123',
-          name: 'Co-op Hub',
-          code: 'HUB-01',
-          status: 'ACTIVE',
+    it('should throw UnauthorizedException if password verification fails', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      (passwordHasher.verify as jest.Mock).mockResolvedValue({
+        isValid: false,
+        needsRehash: false,
+        algorithm: 'argon2id',
+      });
+      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'audit-1' });
+
+      await expect(
+        service.login({ email: mockUser.email, password: 'WrongPassword' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should authenticate user with Argon2id hash successfully', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      (passwordHasher.verify as jest.Mock).mockResolvedValue({
+        isValid: true,
+        needsRehash: false,
+        algorithm: 'argon2id',
+      });
+      (prisma.user.update as jest.Mock).mockResolvedValue(mockUser);
+      (prisma.session.create as jest.Mock).mockResolvedValue({ id: 'session-1' });
+      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'audit-1' });
+
+      const result = await service.login({
+        email: mockUser.email,
+        password: 'ValidPassword#123',
+      });
+
+      expect(result.user.email).toBe(mockUser.email);
+      expect(result.user.role).toBe(UserRole.OWNER);
+      expect(result.tokens.accessToken).toBe('mock-jwt-token');
+      expect(passwordHasher.hash).not.toHaveBeenCalled(); // No rehash needed
+    });
+
+    it('should transparently migrate legacy bcrypt hash to Argon2id on successful login', async () => {
+      const userWithBcrypt = {
+        ...mockUser,
+        passwordHash: '$2b$10$legacybcrypthashvalue',
+      };
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(userWithBcrypt);
+      (passwordHasher.verify as jest.Mock).mockResolvedValue({
+        isValid: true,
+        needsRehash: true,
+        algorithm: 'bcrypt',
+      });
+      (passwordHasher.hash as jest.Mock).mockResolvedValue('$argon2id$v=19$newArgonHash');
+      (prisma.user.update as jest.Mock).mockResolvedValue(userWithBcrypt);
+      (prisma.session.create as jest.Mock).mockResolvedValue({ id: 'session-1' });
+      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'audit-1' });
+
+      const result = await service.login({
+        email: userWithBcrypt.email,
+        password: 'LegacyPassword#123',
+      });
+
+      expect(result.user.email).toBe(userWithBcrypt.email);
+      expect(passwordHasher.hash).toHaveBeenCalledWith('LegacyPassword#123');
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: userWithBcrypt.id },
+        data: { passwordHash: '$argon2id$v=19$newArgonHash' },
+      });
+    });
+
+    it('should throw UnauthorizedException if user account is suspended', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        status: UserStatus.SUSPENDED,
+      });
+      (passwordHasher.verify as jest.Mock).mockResolvedValue({
+        isValid: true,
+        needsRehash: false,
+        algorithm: 'argon2id',
+      });
+
+      await expect(
+        service.login({ email: mockUser.email, password: 'ValidPassword' }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should filter by societyCode and reject if code does not match active membership', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      (passwordHasher.verify as jest.Mock).mockResolvedValue({
+        isValid: true,
+        needsRehash: false,
+        algorithm: 'argon2id',
+      });
+
+      await expect(
+        service.login({
+          email: mockUser.email,
+          password: 'ValidPassword',
+          societyCode: 'NON-EXISTENT-CODE',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  describe('refresh & Token Rotation with Reuse Detection', () => {
+    const rawRefreshToken = 'sample-refresh-token-bytes';
+    const tokenHash = 'mocked-hash-of-sample-refresh-token';
+
+    beforeEach(() => {
+      jest.spyOn(service, 'hashToken').mockReturnValue(tokenHash);
+    });
+
+    it('should rotate token successfully and issue new token pair', async () => {
+      const validSession = {
+        id: 'session-1',
+        userId: 'user-1',
+        activeTenantId: 'tenant-1',
+        familyId: 'family-uuid-1',
+        tokenHash,
+        isRevoked: false,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+        user: {
+          id: 'user-1',
+          email: 'user@test.org',
+          firstName: 'User',
+          lastName: 'One',
+          status: UserStatus.ACTIVE,
+          memberships: [
+            {
+              tenantId: 'tenant-1',
+              role: UserRole.ADMIN,
+              status: MembershipStatus.ACTIVE,
+              tenant: { id: 'tenant-1', name: 'Co-op', code: 'CO-01', status: 'ACTIVE' },
+            },
+          ],
         },
       };
 
-      (prisma.user.findFirst as jest.Mock).mockResolvedValue(mockUser);
-      (prisma.user.update as jest.Mock).mockResolvedValue(mockUser);
-      (prisma.session.create as jest.Mock).mockResolvedValue({ id: 'session-123' });
-      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'audit-123' });
+      (prisma.session.findUnique as jest.Mock).mockResolvedValue(validSession);
+      (prisma.$transaction as jest.Mock).mockResolvedValue([
+        { id: 'session-1', isRevoked: true },
+        { id: 'session-2', familyId: 'family-uuid-1' },
+      ]);
 
-      const result = await service.login({ email: 'test@weaver.org', password });
+      const result = await service.refresh(rawRefreshToken);
 
-      expect(result.user.id).toBe('user-123');
-      expect(result.user.role).toBe(UserRole.WEAVER);
       expect(result.tokens.accessToken).toBe('mock-jwt-token');
+      expect(result.tokens.refreshToken).toBeDefined();
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('CRITICAL: should detect refresh token reuse, revoke entire token family and throw UnauthorizedException', async () => {
+      const alreadyRevokedSession = {
+        id: 'session-revoked-1',
+        userId: 'user-1',
+        familyId: 'compromised-family-uuid-999',
+        tokenHash,
+        isRevoked: true,
+        revokedAt: new Date(),
+        expiresAt: new Date(Date.now() + 1000 * 60 * 60),
+        user: { id: 'user-1', status: UserStatus.ACTIVE, memberships: [] },
+      };
+
+      (prisma.session.findUnique as jest.Mock).mockResolvedValue(alreadyRevokedSession);
+      (prisma.session.updateMany as jest.Mock).mockResolvedValue({ count: 3 });
+      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'audit-alert' });
+
+      await expect(service.refresh(rawRefreshToken)).rejects.toThrow(
+        'Security violation: Refresh token reuse detected. Please log in again.',
+      );
+
+      // Verify entire family is revoked
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { familyId: 'compromised-family-uuid-999' },
+        data: { isRevoked: true, revokedAt: expect.any(Date) },
+      });
+      // Verify audit security alert logged
+      expect(prisma.auditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: 'AUTH_REFRESH_TOKEN_REUSE_DETECTED',
+          }),
+        }),
+      );
+    });
+
+    it('should throw UnauthorizedException if session is expired', async () => {
+      const expiredSession = {
+        id: 'session-expired',
+        userId: 'user-1',
+        familyId: 'family-1',
+        tokenHash,
+        isRevoked: false,
+        revokedAt: null,
+        expiresAt: new Date(Date.now() - 1000 * 60), // In past
+        user: { id: 'user-1', status: UserStatus.ACTIVE, memberships: [] },
+      };
+
+      (prisma.session.findUnique as jest.Mock).mockResolvedValue(expiredSession);
+      (prisma.session.update as jest.Mock).mockResolvedValue(expiredSession);
+
+      await expect(service.refresh(rawRefreshToken)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+  });
+
+  describe('selectTenant', () => {
+    it('should switch tenant and issue re-scoped tokens if user has active membership', async () => {
+      const mockUser = {
+        id: 'user-1',
+        email: 'user@test.org',
+        memberships: [
+          {
+            tenantId: 'tenant-target',
+            role: UserRole.STOREKEEPER,
+            status: MembershipStatus.ACTIVE,
+            tenant: { id: 'tenant-target', name: 'Target Mill', code: 'TM-01', status: 'ACTIVE' },
+          },
+        ],
+      };
+
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      (prisma.session.create as jest.Mock).mockResolvedValue({ id: 'session-new' });
+      (prisma.auditLog.create as jest.Mock).mockResolvedValue({ id: 'audit-switch' });
+
+      const result = await service.selectTenant('user-1', 'tenant-target');
+
+      expect(result.user.tenantId).toBe('tenant-target');
+      expect(result.user.role).toBe(UserRole.STOREKEEPER);
+      expect(result.tokens.accessToken).toBe('mock-jwt-token');
+    });
+
+    it('should throw ForbiddenException if user lacks active membership in target tenant', async () => {
+      const mockUser = {
+        id: 'user-1',
+        email: 'user@test.org',
+        memberships: [],
+      };
+
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+
+      await expect(
+        service.selectTenant('user-1', 'unauthorized-tenant-id'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('changePassword', () => {
+    it('should update password with Argon2id and revoke all active sessions', async () => {
+      const mockUser = {
+        id: 'user-1',
+        passwordHash: '$argon2id$oldhash',
+      };
+
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      (passwordHasher.verify as jest.Mock).mockResolvedValue({
+        isValid: true,
+        needsRehash: false,
+        algorithm: 'argon2id',
+      });
+      (passwordHasher.hash as jest.Mock).mockResolvedValue('$argon2id$newhash');
+      (prisma.$transaction as jest.Mock).mockResolvedValue([]);
+
+      await service.changePassword('user-1', {
+        currentPassword: 'OldPassword#123',
+        newPassword: 'NewPassword#456',
+      });
+
+      expect(passwordHasher.hash).toHaveBeenCalledWith('NewPassword#456');
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('should throw UnauthorizedException if current password verification fails', async () => {
+      const mockUser = {
+        id: 'user-1',
+        passwordHash: '$argon2id$oldhash',
+      };
+
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue(mockUser);
+      (passwordHasher.verify as jest.Mock).mockResolvedValue({
+        isValid: false,
+        needsRehash: false,
+        algorithm: 'argon2id',
+      });
+
+      await expect(
+        service.changePassword('user-1', {
+          currentPassword: 'IncorrectOldPassword',
+          newPassword: 'NewPassword#456',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

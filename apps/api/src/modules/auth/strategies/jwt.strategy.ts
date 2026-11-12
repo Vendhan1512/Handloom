@@ -1,20 +1,26 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Request } from 'express';
 import { AppConfigService } from '../../../config/app-config.service';
 import { prisma } from '@handloom/database';
 import {
   AuthenticatedUser,
   JwtPayload,
+  MembershipStatus,
   UserRole,
   UserStatus,
 } from '@handloom/types';
+import { getPermissionsForRole } from '../../../common/permissions/permission-catalog';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(configService: AppConfigService) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        (req: Request) => req?.cookies?.['access_token'] || null,
+      ]),
       ignoreExpiration: false,
       secretOrKey: configService.jwt.secret,
     });
@@ -27,26 +33,43 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      include: { tenant: true },
     });
 
     if (!user || user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('User account is inactive or not found');
     }
 
-    if (user.tenant.status !== 'ACTIVE') {
+    // Resolve tenant membership
+    const membership = await prisma.tenantMembership.findUnique({
+      where: {
+        userId_tenantId: {
+          userId: user.id,
+          tenantId: payload.tenantId,
+        },
+      },
+      include: { tenant: true },
+    });
+
+    if (!membership || membership.status !== MembershipStatus.ACTIVE) {
+      throw new UnauthorizedException('Active membership not found for this tenant');
+    }
+
+    if (membership.tenant.status !== 'ACTIVE') {
       throw new UnauthorizedException('Tenant society account is inactive');
     }
+
+    const permissions = getPermissionsForRole(membership.role as UserRole);
 
     return {
       id: user.id,
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
-      role: user.role as UserRole,
-      tenantId: user.tenantId,
-      tenantName: user.tenant.name,
-      tenantCode: user.tenant.code,
+      role: membership.role as UserRole,
+      tenantId: membership.tenant.id,
+      tenantName: membership.tenant.name,
+      tenantCode: membership.tenant.code,
+      permissions,
     };
   }
 }
