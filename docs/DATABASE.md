@@ -1,152 +1,252 @@
-# Handloom Database Engineering Standards (docs/DATABASE.md)
+# Handloom Database Engineering Standards & Multi-Tenant Architecture (`docs/DATABASE.md`)
 
-## 1. Core Database Philosophy
+## 1. Executive Summary & Core Philosophy
 
-The Handloom platform manages physical natural fiber inventories, high-value artisanal products, and worker livelihoods. The database architecture is built around **strict relational integrity, non-negotiable multi-tenant isolation, immutable event/transaction ledgers, and exact decimal arithmetic**.
+The Handloom Operations Management Platform manages real physical textile supply chains, precious yarn inventories (silk, zari, cotton), artisan livelihoods, and financial accounting. The database architecture is built around:
 
-Floating-point types (`float`, `double`) are **strictly prohibited** for any quantities, dimensions, weights, or currency values.
+1. **Strict Relational Integrity:** Enforced by PostgreSQL foreign keys, unique compound constraints, and check conditions.
+2. **Deterministic Decimal Arithmetic:** Floating-point data types (`float`, `double`) are **strictly prohibited** for all monetary, quantity, weight, and dimensional values.
+3. **Defense-in-Depth Multi-Tenant Isolation:** Triple-layer security combining application-level context validation, transaction-scoped parameter injection (`set_config`), and PostgreSQL Row-Level Security (RLS).
+4. **Append-Only Immutable Event Ledgers:** Historical material consumption, wages, and audit logs are never modified or deleted; corrections occur through explicit reversing transactions.
+5. **Horizontal Concurrency Readiness:** Stateless application connection pooling designed to scale from 1,000 to a target of 10,000 concurrent users under load.
 
 ---
 
-## 2. Technical Stack & Engine Standards
+## 2. Technical Stack & Prisma Package Organization
+
+The database layer is isolated into the `@handloom/database` package within the Turborepo monorepo:
+
+```text
+packages/database/
+├── prisma/
+│   ├── schema.prisma                       # Centralized declarative Prisma schema
+│   └── migrations/
+│       ├── migration_lock.toml             # Prisma provider lockfile (postgresql)
+│       └── 20261110000000_init_multi_tenant_foundation/
+│           └── migration.sql               # Baseline DDL + PostgreSQL RLS policies
+├── src/
+│   ├── index.ts                            # Centralized PrismaClient instance & exports
+│   └── tenant.ts                           # Multi-tenant context helpers & RLS wrappers
+├── package.json                            # Package scripts and Prisma dependencies
+└── tsconfig.json                           # TypeScript strict compiler options
+```
+
+### Dependency & Runtime Specifications
 
 - **Database Engine:** PostgreSQL 16 (LTS).
-- **ORM / Query Engine:** Prisma ORM 6.
-- **Identifier Strategy:** Universally Unique Identifiers (UUIDv4) across all primary keys (`@id @default(uuid())`). No sequential integer IDs are exposed externally or used as primary keys.
-- **Case Convention:**
-  - Database table names: Lowercase snake_case plural (`tenants`, `users`, `yarn_lots`, `audit_logs`).
-  - Column names: Lowercase snake_case (`tenant_id`, `created_at`, `password_hash`).
-  - Model and field names in TypeScript/Prisma: PascalCase models, camelCase fields mapped with `@map(...)` and `@@map(...)`.
+- **ORM / Query Engine:** Prisma ORM 6.4.1.
+- **Client Management:** Centralized singleton pattern in `src/index.ts` prevents connection exhaustion across hot-reloads during local development.
+- **Identifier Strategy:** Universally Unique Identifiers (UUIDv4 via `@default(uuid())`) across all primary keys. Sequential auto-incrementing integers are prohibited for entity IDs.
+- **Naming Conventions:**
+  - Database tables: Lowercase snake_case plural (`tenants`, `users`, `audit_logs`, `sessions`).
+  - Database columns: Lowercase snake_case (`tenant_id`, `created_at`, `password_hash`).
+  - TypeScript models: PascalCase (`Tenant`, `User`, `AuditLog`).
 
 ---
 
-## 3. Data Types & Precision Standards
+## 3. Canonical Tenant Model Decision
 
-| Domain Attribute                                    | PostgreSQL Type  | Prisma Schema Type           | Justification                                                                   |
-| :-------------------------------------------------- | :--------------- | :--------------------------- | :------------------------------------------------------------------------------ |
-| **Monetary Values (Prices, Wages, Balances)**       | `NUMERIC(14, 2)` | `Decimal @db.Decimal(14, 2)` | Supports up to ₹999,999,999,999.99 without rounding or precision drift.         |
-| **Material Weights (Yarn kg, Hank grams)**          | `NUMERIC(12, 3)` | `Decimal @db.Decimal(12, 3)` | Precision down to 1 gram (0.001 kg) essential for silk and zari accountability. |
-| **Fabric Dimensions (Length meters, Width inches)** | `NUMERIC(8, 2)`  | `Decimal @db.Decimal(8, 2)`  | Exact fractional inches and centimeters for loom reed widths and cuts.          |
-| **Percentages (Loss, Crimp, Tolerances)**           | `NUMERIC(5, 2)`  | `Decimal @db.Decimal(5, 2)`  | Exact percentage calculations (e.g., 99.99%).                                   |
-| **Timestamps**                                      | `TIMESTAMPTZ`    | `DateTime`                   | Strict UTC timestamping with microsecond accuracy.                              |
-| **JSON Metadata**                                   | `JSONB`          | `Json?`                      | Binary JSON for non-relational tenant configurations and audit action context.  |
+### Architectural Decision: `Tenant` vs. `Organization`
+
+The platform evaluated whether `Tenant` or `Organization` represents the canonical entity for handloom businesses:
+
+- **Selected Canonical Entity:** **`Tenant`**
+- **Rationale:**
+  1. **Domain Alignment:** In the handloom ecosystem, primary weaver cooperative societies (e.g. _Kanchipuram Silk Weavers Co-op_), private spinning/weaving mills, and master weaver clusters operate as distinct legal and accounting tenants.
+  2. **Codebase Consistency:** All established authentication modules, JWT claims (`tenantId`), DTOs (`register-society.dto.ts`), and TypeScript interfaces (`@handloom/types`) standardize on `tenantId`.
+  3. **Multi-Tenant Clarity:** Avoids semantic confusion where an "Organization" could imply internal departments versus true data boundary separation.
+
+### Tenant Schema Specification
+
+```prisma
+model Tenant {
+  id           String       @id @default(uuid())
+  name         String
+  code         String       @unique /// Unique business code e.g. "KANCHI-01"
+  slug         String?      @unique /// URL-friendly unique slug e.g. "kanchi-silk-weavers"
+  type         TenantType   @default(COOPERATIVE)
+  status       TenantStatus @default(ACTIVE)
+  contactEmail String?      @map("contact_email")
+  contactPhone String?      @map("contact_phone")
+  address      String?
+  settings     Json?        /// Tenant configuration (tax rates, standard piece wages)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  users     User[]
+  auditLogs AuditLog[]
+
+  @@index([status])
+  @@index([code])
+  @@index([slug])
+  @@map("tenants")
+}
+```
 
 ---
 
-## 4. Multi-Tenant Architecture & Row-Level Security (RLS)
+## 4. Multi-Tenant Isolation Strategy (Defense-in-Depth)
 
-### Tenant Isolation Model
-
-Every domain table contains a mandatory `tenant_id` foreign key referencing the `tenants` table with `onDelete: Cascade`.
-
-### Row-Level Security Strategy
-
-1. **PostgreSQL RLS Policies:**
-   - In production, PostgreSQL RLS is enabled on all tenant-partitioned tables (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`).
-   - The security policy restricts row visibility:
-     ```sql
-     CREATE POLICY tenant_isolation_policy ON users
-       FOR ALL
-       USING (tenant_id = current_setting('app.current_tenant_id', true));
-     ```
-2. **Transactional Session Variable Injection:**
-   - Database operations pass through the helper utility `withTenantContext(tenantId, tx => ...)` (`packages/database/src/tenant.ts`).
-   - This sets the transaction-local PostgreSQL session setting:
-     ```sql
-     SET LOCAL app.current_tenant_id = 'tenant-uuid';
-     ```
-3. **Implementation Status:**
-   - RLS schema policies script: **IMPLEMENTED** in `packages/database/prisma/rls.sql`.
-   - Context runner: **IMPLEMENTED** in `packages/database/src/tenant.ts`.
-   - Production Database Enforcement: **PLANNED** for initial migration execution against live PostgreSQL instances.
-
----
-
-## 5. Ledger Architecture: Source of Truth vs. Summary Projections
+Tenant isolation is implemented through three independent defensive perimeters:
 
 ```mermaid
 flowchart TD
-    subgraph Transactions["Immutable Source-of-Truth Ledgers (Append-Only)"]
-        YarnLedger["YarnStockLedger (Purchases, Issues, Returns, Wastage)"]
-        WageLedger["WorkerWageLedger (Piece Credits, Advance Debits, Payouts)"]
-    end
-
-    subgraph Operations["Atomic Execution"]
-        PrismaTx["PostgreSQL Transaction (SERIALIZABLE or READ COMMITTED)"]
-    end
-
-    subgraph Projections["Fast Rebuildable Projections / Read Summaries"]
-        LotBalance["YarnLot.available_kg"]
-        WeaverCustody["WeaverCustodySummary.outstanding_yarn_kg"]
-        WorkerBalance["WorkerLedgerSummary.net_payable"]
-    end
-
-    PrismaTx --> YarnLedger
-    PrismaTx --> WageLedger
-    YarnLedger -.-> LotBalance
-    YarnLedger -.-> WeaverCustody
-    WageLedger -.-> WorkerBalance
+    Req["Incoming API Request"] --> L1["Layer 1: Application Tenant Scoping & DTO Guards"]
+    L1 --> L2["Layer 2: Transaction-Local Parameter (set_config)"]
+    L2 --> L3["Layer 3: PostgreSQL Row-Level Security (RLS Policies)"]
+    L3 --> DB[(PostgreSQL Database Tables)]
 ```
 
-### The Golden Ledger Rule
+### Layer 1: Application-Level Tenant Scoping
 
-1. **Append-Only Immutability:** Records in `YarnStockLedger`, `AuditLog`, and financial wage ledgers are **never updated or deleted**.
-2. **Reversals Over Updates:** If an error occurs in quantity or rate, an explicit compensating transaction record (type: `ADJUSTMENT` or `REVERSAL`) is inserted referencing the original transaction ID.
-3. **Rebuildability:** Any balance column (such as `available_quantity_kg` on `YarnLot` or `outstanding_balance` on an artisan advance) is treated as a **materialized cache**. It must be mathematically rebuildable at any time by summing the append-only ledger entries.
+- All service queries explicitly inject `tenantId: user.tenantId` into Prisma `where` clauses.
+- The `validateTenantOwnership(record, expectedTenantId)` helper verifies entity ownership before mutations. Any mismatched access throws `TenantIsolationViolationError`.
+
+### Layer 2: Transaction-Scoped Context Injection
+
+- Operations are executed inside `withTenantContext(tenantId, async (tx) => { ... })`.
+- Utilizes parameterized PostgreSQL configuration parameter injection:
+  ```typescript
+  await tx.$executeRaw`SELECT set_config('app.current_tenant_id', ${sanitizedTenantId}, true);`;
+  ```
+- **Connection Pool Safety:** Setting `is_local = true` (the third argument in `set_config`) guarantees the setting is transaction-local. When the transaction commits or aborts, the parameter automatically resets, preventing session bleeding across pooled connections.
+
+### Layer 3: PostgreSQL Row-Level Security (RLS)
+
+- Enabled and forced on all tenant-partitioned tables in migration SQL:
+  ```sql
+  ALTER TABLE "users" ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE "users" FORCE ROW LEVEL SECURITY;
+
+  CREATE POLICY tenant_isolation_policy ON "users"
+      FOR ALL
+      USING (
+          current_setting('app.is_super_admin', true) = 'true'
+          OR
+          "tenant_id" = NULLIF(current_setting('app.current_tenant_id', true), '')::text
+      )
+      WITH CHECK (
+          current_setting('app.is_super_admin', true) = 'true'
+          OR
+          "tenant_id" = NULLIF(current_setting('app.current_tenant_id', true), '')::text
+      );
+  ```
+- **Default Deny:** If `app.current_tenant_id` is missing, `NULLIF(current_setting(..., true), '')` evaluates to `NULL`, denying access and returning 0 rows.
+- **FORCE ROW LEVEL SECURITY:** Guarantees that table owners and unprivileged application roles cannot bypass policy checks.
 
 ---
 
-## 6. Concurrency Handling & Pessimistic / Optimistic Locking
+## 5. Database Integrity Standards for Future Business Tables
 
-In a multi-user environment (1,000 to 10,000 concurrent users), multiple supervisors may simultaneously attempt to allocate the same physical yarn lot.
+All subsequent domain entities (Catalog, Yarn Inventory, Loom Management, Wages) must comply with these immutable integrity rules:
 
-### Strategy 1: Atomic Decrement Queries
+| Standard              | Rule & Specification                                                  | Justification                                                |
+| :-------------------- | :-------------------------------------------------------------------- | :----------------------------------------------------------- |
+| **Monetary Values**   | `Decimal @db.Decimal(14, 2)`                                          | Up to ₹999,999,999,999.99 with exact paise precision.        |
+| **Material Weights**  | `Decimal @db.Decimal(12, 3)`                                          | Exact 1-gram (0.001 kg) precision for silk and zari control. |
+| **Fabric Dimensions** | `Decimal @db.Decimal(8, 2)`                                           | Exact centimetre/inch lengths for cuts and warp sizing.      |
+| **Percentages**       | `Decimal @db.Decimal(5, 2)`                                           | Up to 100.00% for wastage, moisture regain, and tolerances.  |
+| **Foreign Keys**      | Explicit FKs with `onDelete: Restrict` on critical financial ledgers. | Prevents accidental cascading data deletion of audit trails. |
+| **Timestamps**        | `createdAt DateTime @default(now())`, `updatedAt DateTime @updatedAt` | UTC timestamping across all operational entities.            |
 
-To prevent race conditions, balance allocations must never read-then-write in separate steps. They must execute atomic conditional updates:
+---
 
-```sql
-UPDATE yarn_lots
-SET available_quantity_kg = available_quantity_kg - :requestedQty,
-    allocated_quantity_kg = allocated_quantity_kg + :requestedQty
-WHERE id = :lotId
-  AND tenant_id = :tenantId
-  AND available_quantity_kg >= :requestedQty;
+## 6. Transaction & Concurrency Strategy
+
+### 1. Prisma Interactive Transactions
+
+Multi-table writes must execute atomically inside `prisma.$transaction`:
+
+```typescript
+await withTenantContext(tenantId, async (tx) => {
+  // Step 1: Issue yarn from stock lot
+  // Step 2: Create weaver issue transaction
+  // Step 3: Append to immutable stock ledger
+});
 ```
 
-If zero rows are updated, the application detects an insufficient stock conflict and throws an explicit `ConflictException` (HTTP 409).
+### 2. Concurrency & Deadlock Prevention
 
-### Strategy 2: Explicit Database Transactions
-
-Multi-table updates (such as issuing yarn from a lot, creating a job card, and logging the ledger entry) must execute inside `prisma.$transaction([ ... ])`.
-
----
-
-## 7. Indexing Standards
-
-To maintain sub-50ms query latency under high data volumes:
-
-1. **Foreign Key Indexes:** Every foreign key column must have an explicit B-tree index (e.g., `@@index([tenantId])`, `@@index([userId])`).
-2. **Composite Tenant Unique Constraints:** Natural keys are scoped by tenant: `@@unique([tenantId, code])`, `@@unique([tenantId, email])`.
-3. **Temporal Sorting Indexes:** Columns frequently used for chronological ordering must be indexed: `@@index([createdAt])`, `@@index([transactionDate])`.
-4. **Status & Enumeration Indexes:** High-cardinality status columns used in filtering must be indexed: `@@index([status])`, `@@index([role])`.
+- **Lock Ordering:** Multi-table writes must acquire locks in alphabetical table order to eliminate cyclic deadlock dependencies.
+- **Atomic Balance Updates:** Balances must be modified using atomic decrement queries rather than memory read-then-write:
+  ```sql
+  UPDATE yarn_lots
+  SET available_kg = available_kg - :qty
+  WHERE id = :id AND tenant_id = :tenantId AND available_kg >= :qty;
+  ```
+- **Idempotency Keys:** Critical dispatch, cut-piece acceptance, and wage disbursement requests will enforce unique idempotency keys in future mutation endpoints.
 
 ---
 
-## 8. Migration Management & Schema Evolution
+## 7. Indexing & Query Performance Standards
 
-1. **Versioned Migrations:** All schema changes must be generated via `pnpm --filter @handloom/database prisma migrate dev --name <descriptive_name>`.
-2. **Zero Destructive Alterations:** Never alter or drop existing production columns in a single release. Follow the **Expand-and-Contract** pattern:
-   - Phase 1 (Expand): Add new column, support writes to both.
-   - Phase 2 (Backfill): Migrate existing records.
-   - Phase 3 (Contract): Deprecate and remove old column.
-3. **No Drift:** Manual changes directly on the production database are strictly prohibited.
+To support 1,000 to 10,000 concurrent users with sub-50ms query latencies:
+
+1. **Tenant-Scoped Compound Indexes:** High-volume queries are scoped by tenant: `@@index([tenantId, createdAt])`, `@@unique([tenantId, code])`.
+2. **Foreign Key Indexes:** Every relational column possesses an explicit index (`@@index([tenantId])`, `@@index([userId])`).
+3. **Query Inspection:** Developers must analyze complex joins using PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` to verify index scans over sequential table scans.
+4. **Connection Pooling:** In production, pgBouncer or AWS RDS Proxy maintains a maximum pool size of 20–50 connections per API pod.
 
 ---
 
-## 9. Backup, Recovery & Retention
+## 8. Migration Management Workflow
 
-- **Continuous Archiving:** PostgreSQL Write-Ahead Logging (WAL) archiving enabled with Point-in-Time Recovery (PITR) up to 35 days.
-- **Daily Snapshots:** Automated nightly snapshots stored across encrypted geo-redundant storage.
-- **Retention Schedule:**
-  - Audit logs and financial ledgers: 7 years minimum retention for statutory cooperative compliance.
-  - Revoked session tokens: Auto-purged after 30 days.
+### Migration Rules
+
+- **Forward-Only Migrations:** Existing applied migrations must never be modified or deleted.
+- **No `db push` in Production:** Production environments must strictly execute `prisma migrate deploy`.
+- **Review Gate:** Every migration SQL file is inspected for locks, backward compatibility, and index creation impact before merging.
+
+### Migration Commands
+
+```bash
+# Generate Prisma client after schema changes
+pnpm --filter @handloom/database db:generate
+
+# Apply migrations in local development
+pnpm --filter @handloom/database db:migrate
+
+# Apply migrations in staging / production (CI/CD)
+pnpm --filter @handloom/database db:deploy
+
+# Inspect database schema via Prisma Studio
+pnpm --filter @handloom/database db:studio
+```
+
+---
+
+## 9. Local & Test Setup Guide
+
+### Local Development Setup
+
+1. Start the PostgreSQL 16 container:
+   ```bash
+   pnpm docker:up
+   ```
+2. Run database migrations:
+   ```bash
+   pnpm --filter @handloom/database db:migrate
+   ```
+3. Generate Prisma client types:
+   ```bash
+   pnpm --filter @handloom/database db:generate
+   ```
+
+### Test Database Strategy
+
+- Unit tests mock Prisma transaction interfaces and verify tenant context parameters, isolation enforcement, and ownership guards.
+- Live database integration tests execute against a dedicated test database (`handloom_test_db`) created in Docker.
+
+---
+
+## 10. Status of Implementation & Boundaries
+
+| Component                                                             |     Status      | Details                                                                                             |
+| :-------------------------------------------------------------------- | :-------------: | :-------------------------------------------------------------------------------------------------- |
+| **Prisma Schema (Tenant, User, AuditLog, Session, SystemHealth)**     | **IMPLEMENTED** | Validated schema with `slug`, compound indexes, and strict typing.                                  |
+| **Initial Migration (`20261110000000_init_multi_tenant_foundation`)** | **IMPLEMENTED** | Versioned migration file containing table DDL and RLS policies.                                     |
+| **Multi-Tenant Context Runner (`withTenantContext`)**                 | **IMPLEMENTED** | Parameterized `set_config` transaction-local context setter.                                        |
+| **Tenant Ownership Guards (`validateTenantOwnership`)**               | **IMPLEMENTED** | Application-level cross-tenant access rejection utility.                                            |
+| **Automated Isolation Unit Tests**                                    | **IMPLEMENTED** | 10 passing unit tests in `tenant-isolation.spec.ts`.                                                |
+| **Live Database RLS Execution**                                       |   **BLOCKED**   | Docker Desktop is currently offline on host; live port 5432 verification pending container startup. |
+| **Domain Business Tables (Inventory, Wages, Orders)**                 |   **PLANNED**   | Deferred to subsequent domain-specific tasks (Task 8.2.3 onwards).                                  |

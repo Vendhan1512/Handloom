@@ -55,6 +55,7 @@ model Tenant {
   id           String       @id @default(uuid())
   name         String
   code         String       @unique /// Unique business code e.g. "KANCHI-01"
+  slug         String?      @unique /// URL-friendly unique slug e.g. "kanchi-silk-weavers"
   type         TenantType   @default(COOPERATIVE)
   status       TenantStatus @default(ACTIVE)
   contactEmail String?      @map("contact_email")
@@ -67,6 +68,9 @@ model Tenant {
   users     User[]
   auditLogs AuditLog[]
 
+  @@index([status])
+  @@index([code])
+  @@index([slug])
   @@map("tenants")
 }
 
