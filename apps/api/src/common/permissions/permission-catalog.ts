@@ -21,6 +21,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     // Roles & RBAC
     Permission.ROLES_READ,
     Permission.ROLES_ASSIGN,
+    // Worker Workforce Management
+    Permission.WORKERS_READ,
+    Permission.WORKERS_CREATE,
+    Permission.WORKERS_UPDATE,
+    Permission.WORKERS_ASSIGN,
     // Audit Trail
     Permission.AUDIT_READ,
     // Commercial Orders
@@ -48,6 +53,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     Permission.USERS_UPDATE,
     Permission.ROLES_READ,
     Permission.ROLES_ASSIGN,
+    Permission.WORKERS_READ,
+    Permission.WORKERS_CREATE,
+    Permission.WORKERS_UPDATE,
+    Permission.WORKERS_ASSIGN,
     Permission.AUDIT_READ,
     Permission.ORDERS_READ,
     Permission.ORDERS_CREATE,
@@ -62,6 +71,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
   [UserRole.OFFICE_STAFF]: [
     Permission.TENANT_READ,
     Permission.USERS_READ,
+    Permission.WORKERS_READ,
     Permission.ORDERS_READ,
     Permission.ORDERS_CREATE,
     Permission.INVENTORY_READ,
@@ -70,6 +80,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
   ],
   [UserRole.ACCOUNTANT]: [
     Permission.TENANT_READ,
+    Permission.USERS_READ,
+    Permission.WORKERS_READ,
     Permission.ORDERS_READ,
     Permission.INVENTORY_READ,
     Permission.WAGES_READ,
@@ -79,12 +91,15 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     Permission.AUDIT_READ,
   ],
   [UserRole.STOREKEEPER]: [
+    Permission.WORKERS_READ,
     Permission.INVENTORY_READ,
     Permission.INVENTORY_ISSUE,
     Permission.ORDERS_READ,
     Permission.PRODUCTION_READ,
   ],
   [UserRole.SUPERVISOR]: [
+    Permission.WORKERS_READ,
+    Permission.WORKERS_ASSIGN,
     Permission.PRODUCTION_READ,
     Permission.PRODUCTION_UPDATE,
     Permission.INVENTORY_READ,
@@ -92,14 +107,17 @@ export const ROLE_PERMISSIONS: Record<UserRole, readonly Permission[]> = {
     Permission.WAGES_READ,
   ],
   [UserRole.QUALITY_INSPECTOR]: [
+    Permission.WORKERS_READ,
     Permission.QUALITY_INSPECT,
     Permission.PRODUCTION_READ,
   ],
   [UserRole.WEAVER]: [
+    Permission.WORKERS_READ,
     Permission.PRODUCTION_READ,
     Permission.WAGES_READ,
   ],
   [UserRole.TRANSPORT_STAFF]: [
+    Permission.WORKERS_READ,
     Permission.ORDERS_READ,
     Permission.PRODUCTION_READ,
   ],

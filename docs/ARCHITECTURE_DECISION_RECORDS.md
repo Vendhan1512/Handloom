@@ -4,6 +4,7 @@
 - [ADR-001: Decoupled User Identity and Tenant Membership Architecture](#adr-001-decoupled-user-identity-and-tenant-membership-architecture)
 - [ADR-002: Dual-Algorithm Password Hashing (Argon2id with Transparent Bcrypt Migration)](#adr-002-dual-algorithm-password-hashing-argon2id-with-transparent-bcrypt-migration)
 - [ADR-003: Cryptographic Refresh Token Rotation with Token Family Reuse Revocation](#adr-003-cryptographic-refresh-token-rotation-with-token-family-reuse-revocation)
+- [ADR-004: Separation of Operational Worker Entities from Authentication User Identities](#adr-004-separation-of-operational-worker-entities-from-authentication-user-identities)
 
 ---
 
@@ -58,3 +59,22 @@
 - **Consequences:**
   - Immediate mitigation of token hijacking without manual administrator intervention.
   - Strict atomic database transactions prevent race conditions during concurrent rotations.
+
+---
+
+## ADR-004: Separation of Operational Worker Entities from Authentication User Identities
+
+- **Status:** Approved & Implemented
+- **Date:** 2026-11-12
+- **Context:**
+  Traditional enterprise HR or ERP architectures mandate that all human actors possess email addresses, passwords, or active SSO user accounts. In the handloom cooperative sector (e.g., Kanchipuram, Salem, Pochampally clusters), the vast majority of physical artisans—weavers, bobbin winders, sizers, beamers, and warpers—work in cottage looms and rural decentralized units. Most do not possess official email addresses, corporate devices, or smartphones. Forcing operational artisans into the user/auth table would create synthetic accounts, compromise security, and prevent accurate operational tracking of the actual workforce.
+- **Decision:**
+  Decouple administrative software operators (`User` / `TenantMembership`) from operational artisans (`Worker`):
+  - `User`: Holds login credentials, email address, password hash, and RBAC roles to access the Web UI and REST API.
+  - `Worker`: Pure operational entity scoped strictly to a `Tenant` by `tenantId`. Identified by human name, operational `workerCode` (unique within tenant), phone number, physical address, cooperative enrollment number, bank account details, and skill proficiencies (`WorkerSkill`).
+  - `Worker` records can be created, updated, and assigned to tasks by authorized supervisors and society administrators without generating any authentication credentials, tokens, or email requirements.
+- **Consequences:**
+  - Positive: Reflects the ground reality of handloom operations without artificial tech barriers.
+  - Positive: Operational artisans are fully tracked for job cards, loom assignments, skills, and wages without security risks from dummy accounts.
+  - Positive: Complete multi-tenant isolation enforced via PostgreSQL Row-Level Security (`workers`, `worker_categories`, `worker_assignments`).
+  - Architecture: If a worker later becomes a digital user (e.g., society staff), their `User` account can optionally link to or reference their operational record, preserving strict separation between identity and craft.

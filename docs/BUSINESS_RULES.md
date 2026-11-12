@@ -154,3 +154,27 @@ In handloom manufacturing and cooperative society administration, operational st
 | **DEC-003** | Silk Mark & Handloom Mark Tagging | Workflow step documented.                                  | Determine whether digital certificate generation and government portal synchronization are required.     |
 | **DEC-004** | Scrap & Thrum Waste Valuation     | Recorded as weight in kg.                                  | Determine whether scrap yarn is resold at salvage rates and how salvage proceeds offset cost of goods.   |
 | **DEC-005** | Multi-Weaver Single Beam Handoff  | Documented as single weaver assignment.                    | Formulate policy when an artisan falls ill and another completes the remaining 30 meters of a warp beam. |
+
+---
+
+## 4. Workforce, Organization & Operational Identity Governance Rules
+
+### Rule 23: Operational Artisan Identity vs System Operators
+- Operational craftspeople (weavers, winders, sizers, beamers) are managed as `Worker` entities and do not require digital system user accounts (`User`), email addresses, or smartphones.
+- Creating a worker record assigns a unique operational `workerCode` scoped to the cooperative or mill tenant.
+- Worker records track physical operational attributes: government/cooperative registration, artisan card number, bank details for wage disbursements, and skill proficiencies.
+
+### Rule 24: Multi-Skilled Artisan Capabilities
+- Artisans frequently possess skills spanning multiple pre-loom and weaving processes (e.g., Korvai weaving, Jacquard setting, Bobbin winding).
+- The platform tracks skill relationships via `WorkerSkill` with proficiency ratings (`BEGINNER`, `INTERMEDIATE`, `EXPERT`, `MASTER_CRAFTSPERSON`) and verified years of experience.
+- Primary skills govern default task suitability, but multi-skilled workers may be assigned across different stages as operational demand shifts.
+
+### Rule 25: Organization Safety & Last-Owner Invariant
+- An organization (`Tenant`) must maintain at least one active user with the `OWNER` role at all times.
+- The platform strictly forbids deactivating, demoting, or deleting the sole active `OWNER` of an organization.
+- Self-elevation or arbitrary role promotion is restricted: an operator cannot assign roles or permissions exceeding their own role hierarchy.
+
+### Rule 26: Worker Assignment Boundary
+- A `WorkerAssignment` tracks the operational allocation of a worker to a task, craft process, or workstation.
+- **Assignment is NOT production completion:** Assigning an artisan creates an operational tracking state; it does not record finished fabric, yarn consumption, or wage accrual.
+- Cross-tenant assignment defense: A worker cannot be assigned to tasks belonging to a different organization under any circumstance. Multi-tenant boundaries are enforced at both database (RLS) and API service layers.

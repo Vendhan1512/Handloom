@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { Navigation } from '../components/navigation';
 
 export const metadata: Metadata = {
   title: 'Handloom Operations Management Platform',
@@ -14,8 +15,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased min-h-screen flex flex-col">{children}</body>
+      <body className="antialiased min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+        <Navigation />
+        <div className="flex-1 flex flex-col">{children}</div>
+      </body>
     </html>
   );
 }
-

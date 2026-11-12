@@ -3,7 +3,7 @@
 // ==============================================================================
 // This schema establishes decoupled tenant memberships (cooperatives/clusters/mills),
 // global user identities, role-based access control, cryptographically rotated sessions,
-// and comprehensive audit logging.
+// operational worker directory, configurable worker skills, and assignments.
 // ==============================================================================
 
 generator client {
@@ -23,6 +23,8 @@ enum TenantType {
   COOPERATIVE
   PRIVATE_MILL
   MASTER_WEAVER_CLUSTER
+  INDIVIDUAL_BUSINESS
+  WEAVER_CLUSTER
 }
 
 enum TenantStatus {
@@ -60,27 +62,55 @@ enum UserStatus {
   SUSPENDED
 }
 
+enum WorkerStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+enum SkillProficiency {
+  BEGINNER
+  INTERMEDIATE
+  SKILLED
+  MASTER
+}
+
+enum AssignmentStatus {
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
 // ------------------------------------------------------------------------------
 // MULTI-TENANT MODELS
 // ------------------------------------------------------------------------------
 
-/// Handloom cooperative society, mill, or master weaver cluster
+/// Handloom cooperative society, mill, master weaver organization, or cluster
 model Tenant {
-  id           String       @id @default(uuid())
-  name         String
-  code         String       @unique /// Unique business code e.g. "KANCHI-01"
-  slug         String?      @unique /// URL-friendly unique slug e.g. "kanchi-silk-weavers"
-  type         TenantType   @default(COOPERATIVE)
-  status       TenantStatus @default(ACTIVE)
-  contactEmail String?      @map("contact_email")
-  contactPhone String?      @map("contact_phone")
-  address      String?
-  settings     Json?        /// Tenant-specific configuration (e.g. piece rates, tax rules)
-  createdAt    DateTime     @default(now()) @map("created_at")
-  updatedAt    DateTime     @updatedAt @map("updated_at")
+  id            String       @id @default(uuid())
+  name          String
+  code          String       @unique /// Unique business code e.g. "KANCHI-01"
+  slug          String?      @unique /// URL-friendly unique slug e.g. "kanchi-silk-weavers"
+  type          TenantType   @default(COOPERATIVE)
+  status        TenantStatus @default(ACTIVE)
+  contactPerson String?      @map("contact_person")
+  contactEmail  String?      @map("contact_email")
+  contactPhone  String?      @map("contact_phone")
+  address       String?
+  district      String?
+  state         String?
+  pinCode       String?      @map("pin_code")
+  settings      Json?        /// Tenant-specific configuration (e.g. piece rates, tax rules)
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
 
-  memberships TenantMembership[]
-  auditLogs   AuditLog[]
+  memberships       TenantMembership[]
+  workers           Worker[]
+  workerCategories  WorkerCategory[]
+  workerAssignments WorkerAssignment[]
+  auditLogs         AuditLog[]
 
   @@index([status])
   @@index([code])
@@ -152,6 +182,111 @@ model Session {
   @@map("sessions")
 }
 
+// ------------------------------------------------------------------------------
+// WORKFORCE & OPERATIONAL WORKER MODELS
+// ------------------------------------------------------------------------------
+
+/// Operational worker record (does NOT require smartphone, email, or login credentials)
+model Worker {
+  id                 String       @id @default(uuid())
+  tenantId           String       @map("tenant_id")
+  tenant             Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workerCode         String       @map("worker_code") /// Unique business code per tenant e.g. "WRK-001"
+  fullName           String       @map("full_name")
+  phone              String?
+  alternatePhone     String?      @map("alternate_phone")
+  address            String?
+  village            String?
+  district           String?
+  state              String?
+  pinCode            String?      @map("pin_code")
+  status             WorkerStatus @default(ACTIVE)
+  joiningDate        DateTime     @default(now()) @map("joining_date")
+  paymentArrangement String?      @map("payment_arrangement") /// e.g. "PIECE_RATE", "DAILY_WAGE", "MONTHLY_SALARY"
+  emergencyContact   String?      @map("emergency_contact")
+  notes              String?
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  skills      WorkerSkill[]
+  assignments WorkerAssignment[]
+
+  @@unique([tenantId, workerCode])
+  @@index([tenantId])
+  @@index([workerCode])
+  @@index([status])
+  @@index([fullName])
+  @@map("workers")
+}
+
+/// Configurable work category defined by tenant or system defaults
+model WorkerCategory {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String   /// e.g. "Weaving", "Bobbin Winding", "Warping", "Dyeing"
+  code        String   /// e.g. "WEAVING", "WARPING", "DYEING"
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  skills      WorkerSkill[]
+  assignments WorkerAssignment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("worker_categories")
+}
+
+/// Worker skill relationship mapping an artisan/worker to categories with proficiency
+model WorkerSkill {
+  id              String           @id @default(uuid())
+  workerId        String           @map("worker_id")
+  worker          Worker           @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  categoryId      String           @map("category_id")
+  category        WorkerCategory   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  proficiency     SkillProficiency @default(INTERMEDIATE)
+  experienceYears Int              @default(0) @map("experience_years")
+  isPrimary       Boolean          @default(false) @map("is_primary")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  @@unique([workerId, categoryId])
+  @@index([workerId])
+  @@index([categoryId])
+  @@map("worker_skills")
+}
+
+/// Worker assignment tracking work allocation without implying production completion or payment
+model WorkerAssignment {
+  id                     String           @id @default(uuid())
+  tenantId               String           @map("tenant_id")
+  tenant                 Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workerId               String           @map("worker_id")
+  worker                 Worker           @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  categoryId             String           @map("category_id")
+  category               WorkerCategory   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  assignmentDate         DateTime         @default(now()) @map("assignment_date")
+  expectedCompletionDate DateTime?        @map("expected_completion_date")
+  status                 AssignmentStatus @default(ASSIGNED)
+  instructions           String?
+  createdById            String?          @map("created_by_id")
+  createdAt              DateTime         @default(now()) @map("created_at")
+  updatedAt              DateTime         @updatedAt @map("updated_at")
+
+  @@index([tenantId])
+  @@index([workerId])
+  @@index([status])
+  @@index([assignmentDate])
+  @@map("worker_assignments")
+}
+
+// ------------------------------------------------------------------------------
+// AUDIT & SYSTEM HEALTH
+// ------------------------------------------------------------------------------
+
 /// Comprehensive, non-repudiation audit trail
 model AuditLog {
   id        String   @id @default(uuid())
@@ -159,8 +294,8 @@ model AuditLog {
   tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId    String?  @map("user_id")
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-  action    String   /// e.g. "AUTH_LOGIN", "AUTH_REGISTER_SOCIETY", "AUTH_REFRESH_TOKEN_REUSE"
-  entity    String   /// e.g. "User", "Tenant", "Session", "TenantMembership"
+  action    String   /// e.g. "AUTH_LOGIN", "WORKER_CREATE", "WORKER_UPDATE", "USER_INVITE"
+  entity    String   /// e.g. "User", "Tenant", "Worker", "WorkerAssignment"
   entityId  String?  @map("entity_id")
   details   Json?    /// Contextual metadata regarding the action
   ipAddress String?  @map("ip_address")

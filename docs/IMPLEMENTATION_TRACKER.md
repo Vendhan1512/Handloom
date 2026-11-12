@@ -20,5 +20,6 @@
 | **Task 8.2.1** | Application Configuration & Environment Management | COMPLETED | Centralized AppConfigService, Zod validation, commit `3334eeb` |
 | **Task 8.2.2** | Database Foundation & Multi-Tenant Architecture | COMPLETED | Prisma schema, PostgreSQL RLS, `withTenantContext`, commit `b02c65f` |
 | **Task 8.2.2.1**| Database Security & Git Integration Verification | COMPLETED | Read-only verification pass, RLS audit, report delivered |
-| **Task 8.2.3** | Production-Grade Authentication & Tenant-Aware RBAC | COMPLETED | Argon2id + bcrypt migration, token family reuse detection, decoupled memberships, 75 tests passing, commit pending |
-| **Task 8.2.4** | Core Domain Modules (Next) | PENDING | Pending Task 8.2.3 review and sign-off |
+| **Task 8.2.3** | Production-Grade Authentication & Tenant-Aware RBAC | COMPLETED | Argon2id + bcrypt migration, token family reuse detection, decoupled memberships, 75 tests passing, commit `c1fcac5` |
+| **Task 8.2.4** | Organization, User & Worker Management Foundation | COMPLETED | Tenant profile, user invitation/status with last-owner defense, operational worker records with skill proficiencies, worker task assignments, PostgreSQL RLS, 95 unit tests passing, commit pending |
+| **Task 8.2.5** | Core Domain Modules (Next) | PENDING | Pending Task 8.2.4 review and sign-off |
