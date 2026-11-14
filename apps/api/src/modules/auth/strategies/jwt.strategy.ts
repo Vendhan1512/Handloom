@@ -3,7 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Request } from 'express';
 import { AppConfigService } from '../../../config/app-config.service';
-import { prisma } from '@handloom/database';
+import { prisma, withTenantContext } from '@handloom/database';
 import {
   AuthenticatedUser,
   JwtPayload,
@@ -39,15 +39,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('User account is inactive or not found');
     }
 
-    // Resolve tenant membership
-    const membership = await prisma.tenantMembership.findUnique({
-      where: {
-        userId_tenantId: {
-          userId: user.id,
-          tenantId: payload.tenantId,
+    // Resolve tenant membership within RLS tenant context
+    // After fail-closed RLS remediation, direct queries without context return zero rows.
+    // withTenantContext sets app.current_tenant_id so RLS permits the lookup.
+    const membership = await withTenantContext(payload.tenantId, async (tx) => {
+      return tx.tenantMembership.findUnique({
+        where: {
+          userId_tenantId: {
+            userId: user.id,
+            tenantId: payload.tenantId,
+          },
         },
-      },
-      include: { tenant: true },
+        include: { tenant: true },
+      });
     });
 
     if (!membership || membership.status !== MembershipStatus.ACTIVE) {

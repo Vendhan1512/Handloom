@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as crypto from 'crypto';
-import { prisma } from '@handloom/database';
+import { prisma, withSuperAdminContext } from '@handloom/database';
 import {
   AuthenticatedUser,
   AuthResponseData,
@@ -73,7 +73,13 @@ export class AuthService {
 
     const passwordHash = await this.passwordHasher.hash(dto.adminPassword);
 
-    const result = await prisma.$transaction(async (tx) => {
+    // Use withSuperAdminContext because:
+    // 1. No tenant exists yet at registration time — no tenant context to set.
+    // 2. After fail-closed RLS remediation, writes to tenant_memberships and
+    //    audit_logs require either super-admin bypass or matching tenant context.
+    // 3. This is a server-side privileged operation — the super-admin flag is
+    //    transaction-local and cannot be set by client requests.
+    const result = await withSuperAdminContext(async (tx) => {
       // 1. Create Tenant
       const tenant = await tx.tenant.create({
         data: {
@@ -174,13 +180,20 @@ export class AuthService {
   async login(dto: LoginDto, meta?: RequestMetadata): Promise<AuthResponseData> {
     const email = dto.email.toLowerCase().trim();
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-      include: {
-        memberships: {
-          include: { tenant: true },
+    // Use withSuperAdminContext for login because:
+    // 1. At login, we don't know which tenant the user belongs to yet.
+    // 2. User may have memberships across multiple tenants.
+    // 3. After fail-closed RLS, querying tenant_memberships without context returns zero rows.
+    // 4. The super-admin context is transaction-local and server-side only.
+    const user = await withSuperAdminContext(async (tx) => {
+      return tx.user.findUnique({
+        where: { email },
+        include: {
+          memberships: {
+            include: { tenant: true },
+          },
         },
-      },
+      });
     });
 
     // Constant-time mitigation / generic error message to prevent account enumeration
@@ -194,16 +207,18 @@ export class AuthService {
     const verification = await this.passwordHasher.verify(dto.password, user.passwordHash);
 
     if (!verification.isValid) {
-      await prisma.auditLog.create({
-        data: {
-          userId: user.id,
-          action: 'AUTH_LOGIN_FAILED',
-          entity: 'User',
-          entityId: user.id,
-          details: { reason: 'Invalid password', ip: meta?.ipAddress },
-          ipAddress: meta?.ipAddress,
-          userAgent: meta?.userAgent,
-        },
+      await withSuperAdminContext(async (tx) => {
+        await tx.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'AUTH_LOGIN_FAILED',
+            entity: 'User',
+            entityId: user.id,
+            details: { reason: 'Invalid password', ip: meta?.ipAddress },
+            ipAddress: meta?.ipAddress,
+            userAgent: meta?.userAgent,
+          },
+        });
       });
       throw new UnauthorizedException('Invalid email or password');
     }
@@ -211,20 +226,22 @@ export class AuthService {
     // Transparent Password Migration: If hash was legacy bcrypt, rehash with Argon2id
     if (verification.needsRehash) {
       const newArgon2idHash = await this.passwordHasher.hash(dto.password);
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { passwordHash: newArgon2idHash },
-      });
-      await prisma.auditLog.create({
-        data: {
-          userId: user.id,
-          action: 'AUTH_PASSWORD_MIGRATED_ARGON2ID',
-          entity: 'User',
-          entityId: user.id,
-          details: { previousAlgorithm: 'bcrypt', newAlgorithm: 'argon2id' },
-          ipAddress: meta?.ipAddress,
-          userAgent: meta?.userAgent,
-        },
+      await withSuperAdminContext(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: { passwordHash: newArgon2idHash },
+        });
+        await tx.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'AUTH_PASSWORD_MIGRATED_ARGON2ID',
+            entity: 'User',
+            entityId: user.id,
+            details: { previousAlgorithm: 'bcrypt', newAlgorithm: 'argon2id' },
+            ipAddress: meta?.ipAddress,
+            userAgent: meta?.userAgent,
+          },
+        });
       });
       logger.info({ userId: user.id }, 'User password hash transparently upgraded to Argon2id');
     }
@@ -269,20 +286,22 @@ export class AuthService {
       meta,
     );
 
-    await prisma.auditLog.create({
-      data: {
-        tenantId: selectedMembership.tenant.id,
-        userId: user.id,
-        action: 'AUTH_LOGIN',
-        entity: 'User',
-        entityId: user.id,
-        details: {
-          tenantCode: selectedMembership.tenant.code,
-          role: userRole,
+    await withSuperAdminContext(async (tx) => {
+      await tx.auditLog.create({
+        data: {
+          tenantId: selectedMembership.tenant.id,
+          userId: user.id,
+          action: 'AUTH_LOGIN',
+          entity: 'User',
+          entityId: user.id,
+          details: {
+            tenantCode: selectedMembership.tenant.code,
+            role: userRole,
+          },
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
         },
-        ipAddress: meta?.ipAddress,
-        userAgent: meta?.userAgent,
-      },
+      });
     });
 
     const membershipsList: TenantMembershipInfo[] = user.memberships.map((m) => ({
@@ -328,17 +347,21 @@ export class AuthService {
 
     const tokenHash = this.hashToken(refreshToken);
 
-    const session = await prisma.session.findUnique({
-      where: { tokenHash },
-      include: {
-        user: {
-          include: {
-            memberships: {
-              include: { tenant: true },
+    // Use withSuperAdminContext because session lookup includes memberships
+    // across tenants, which fail-closed RLS would block without context.
+    const session = await withSuperAdminContext(async (tx) => {
+      return tx.session.findUnique({
+        where: { tokenHash },
+        include: {
+          user: {
+            include: {
+              memberships: {
+                include: { tenant: true },
+              },
             },
           },
         },
-      },
+      });
     });
 
     // 1. REUSE DETECTION: If token was already revoked, revoke entire family!
@@ -348,21 +371,23 @@ export class AuthService {
         data: { isRevoked: true, revokedAt: new Date() },
       });
 
-      await prisma.auditLog.create({
-        data: {
-          tenantId: session.activeTenantId,
-          userId: session.userId,
-          action: 'AUTH_REFRESH_TOKEN_REUSE_DETECTED',
-          entity: 'Session',
-          entityId: session.id,
-          details: {
-            familyId: session.familyId,
+      await withSuperAdminContext(async (tx) => {
+        await tx.auditLog.create({
+          data: {
+            tenantId: session.activeTenantId,
+            userId: session.userId,
+            action: 'AUTH_REFRESH_TOKEN_REUSE_DETECTED',
+            entity: 'Session',
+            entityId: session.id,
+            details: {
+              familyId: session.familyId,
+              ipAddress: meta?.ipAddress,
+              userAgent: meta?.userAgent,
+            },
             ipAddress: meta?.ipAddress,
             userAgent: meta?.userAgent,
           },
-          ipAddress: meta?.ipAddress,
-          userAgent: meta?.userAgent,
-        },
+        });
       });
 
       logger.error(
@@ -495,14 +520,16 @@ export class AuthService {
       });
     }
 
-    await prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'AUTH_LOGOUT',
-        entity: 'User',
-        entityId: userId,
-        details: { specificSession: !!refreshToken },
-      },
+    await withSuperAdminContext(async (tx) => {
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'AUTH_LOGOUT',
+          entity: 'User',
+          entityId: userId,
+          details: { specificSession: !!refreshToken },
+        },
+      });
     });
   }
 
@@ -510,13 +537,15 @@ export class AuthService {
    * Retrieves authenticated user details and active tenant context.
    */
   async getMe(userId: string, activeTenantId?: string): Promise<AuthenticatedUser> {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        memberships: {
-          include: { tenant: true },
+    const user = await withSuperAdminContext(async (tx) => {
+      return tx.user.findUnique({
+        where: { id: userId },
+        include: {
+          memberships: {
+            include: { tenant: true },
+          },
         },
-      },
+      });
     });
 
     if (!user) {
@@ -567,13 +596,15 @@ export class AuthService {
     targetTenantId: string,
     meta?: RequestMetadata,
   ): Promise<AuthResponseData> {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        memberships: {
-          include: { tenant: true },
+    const user = await withSuperAdminContext(async (tx) => {
+      return tx.user.findUnique({
+        where: { id: userId },
+        include: {
+          memberships: {
+            include: { tenant: true },
+          },
         },
-      },
+      });
     });
 
     if (!user) {
@@ -602,17 +633,19 @@ export class AuthService {
       meta,
     );
 
-    await prisma.auditLog.create({
-      data: {
-        tenantId: targetMembership.tenant.id,
-        userId: user.id,
-        action: 'AUTH_TENANT_SWITCHED',
-        entity: 'Tenant',
-        entityId: targetMembership.tenant.id,
-        details: { targetTenantCode: targetMembership.tenant.code, role },
-        ipAddress: meta?.ipAddress,
-        userAgent: meta?.userAgent,
-      },
+    await withSuperAdminContext(async (tx) => {
+      await tx.auditLog.create({
+        data: {
+          tenantId: targetMembership.tenant.id,
+          userId: user.id,
+          action: 'AUTH_TENANT_SWITCHED',
+          entity: 'Tenant',
+          entityId: targetMembership.tenant.id,
+          details: { targetTenantCode: targetMembership.tenant.code, role },
+          ipAddress: meta?.ipAddress,
+          userAgent: meta?.userAgent,
+        },
+      });
     });
 
     return {
@@ -673,13 +706,15 @@ export class AuthService {
       data: { isRevoked: true, revokedAt: new Date() },
     });
 
-    await prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'AUTH_SESSION_REVOKED',
-        entity: 'Session',
-        entityId: sessionId,
-      },
+    await withSuperAdminContext(async (tx) => {
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'AUTH_SESSION_REVOKED',
+          entity: 'Session',
+          entityId: sessionId,
+        },
+      });
     });
   }
 
@@ -710,17 +745,17 @@ export class AuthService {
 
     const newHash = await this.passwordHasher.hash(dto.newPassword);
 
-    await prisma.$transaction([
-      prisma.user.update({
+    await withSuperAdminContext(async (tx) => {
+      await tx.user.update({
         where: { id: user.id },
         data: { passwordHash: newHash },
-      }),
+      });
       // Revoke all existing sessions to enforce re-authentication
-      prisma.session.updateMany({
+      await tx.session.updateMany({
         where: { userId: user.id, isRevoked: false },
         data: { isRevoked: true, revokedAt: new Date() },
-      }),
-      prisma.auditLog.create({
+      });
+      await tx.auditLog.create({
         data: {
           userId: user.id,
           action: 'AUTH_PASSWORD_CHANGED',
@@ -730,8 +765,8 @@ export class AuthService {
           ipAddress: meta?.ipAddress,
           userAgent: meta?.userAgent,
         },
-      }),
-    ]);
+      });
+    });
   }
 
   /**

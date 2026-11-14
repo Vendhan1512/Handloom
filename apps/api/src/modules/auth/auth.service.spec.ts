@@ -4,7 +4,7 @@ import { ConflictException, UnauthorizedException, ForbiddenException } from '@n
 import { AuthService } from './auth.service';
 import { PasswordHasherService } from './services/password-hasher.service';
 import { AppConfigService } from '../../config/app-config.service';
-import { prisma } from '@handloom/database';
+import { prisma, withSuperAdminContext, withTenantContext } from '@handloom/database';
 import {
   MembershipStatus,
   Permission,
@@ -13,8 +13,8 @@ import {
   UserStatus,
 } from '@handloom/types';
 
-jest.mock('@handloom/database', () => ({
-  prisma: {
+jest.mock('@handloom/database', () => {
+  const internalPrisma: any = {
     tenant: {
       findUnique: jest.fn(),
       create: jest.fn(),
@@ -42,9 +42,23 @@ jest.mock('@handloom/database', () => ({
     auditLog: {
       create: jest.fn(),
     },
-    $transaction: jest.fn(),
-  },
-}));
+    $transaction: jest.fn((cb: any) =>
+      typeof cb === 'function' ? cb(internalPrisma) : Promise.all(cb),
+    ),
+  };
+
+  return {
+    prisma: internalPrisma,
+    withSuperAdminContext: jest.fn((cb: any) => {
+      internalPrisma.$transaction(cb);
+      return cb(internalPrisma);
+    }),
+    withTenantContext: jest.fn((_tenantId: string, cb: any) => {
+      internalPrisma.$transaction(cb);
+      return cb(internalPrisma);
+    }),
+  };
+});
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -87,6 +101,17 @@ describe('AuthService', () => {
     jwtService = module.get<JwtService>(JwtService);
     passwordHasher = module.get<PasswordHasherService>(PasswordHasherService);
     jest.clearAllMocks();
+    (withSuperAdminContext as jest.Mock).mockImplementation((cb: any) => {
+      (prisma.$transaction as jest.Mock)(cb);
+      return cb(prisma);
+    });
+    (withTenantContext as jest.Mock).mockImplementation((_tenantId: string, cb: any) => {
+      (prisma.$transaction as jest.Mock)(cb);
+      return cb(prisma);
+    });
+    (prisma.$transaction as jest.Mock).mockImplementation((cb: any) =>
+      typeof cb === 'function' ? cb(prisma) : Promise.all(cb),
+    );
   });
 
   it('should be defined', () => {
@@ -112,35 +137,39 @@ describe('AuthService', () => {
 
     it('should register tenant, user and OWNER membership in a transaction and return tokens', async () => {
       (prisma.tenant.findUnique as jest.Mock).mockResolvedValue(null);
+      const mockRegisterTx = {
+        tenant: {
+          create: jest.fn().mockResolvedValue({
+            id: 'tenant-salem-1',
+            name: dto.societyName,
+            code: dto.societyCode,
+          }),
+        },
+        user: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({
+            id: 'user-admin-1',
+            email: dto.adminEmail,
+            firstName: dto.adminFirstName,
+            lastName: dto.adminLastName,
+          }),
+        },
+        tenantMembership: {
+          create: jest.fn().mockResolvedValue({
+            id: 'membership-1',
+            role: UserRole.OWNER,
+            status: MembershipStatus.ACTIVE,
+          }),
+        },
+        auditLog: {
+          create: jest.fn().mockResolvedValue({ id: 'audit-log-1' }),
+        },
+      };
+      (withSuperAdminContext as jest.Mock).mockImplementationOnce(async (callback) => {
+        return callback(mockRegisterTx);
+      });
       (prisma.$transaction as jest.Mock).mockImplementation(async (callback) => {
-        return callback({
-          tenant: {
-            create: jest.fn().mockResolvedValue({
-              id: 'tenant-salem-1',
-              name: dto.societyName,
-              code: dto.societyCode,
-            }),
-          },
-          user: {
-            findUnique: jest.fn().mockResolvedValue(null),
-            create: jest.fn().mockResolvedValue({
-              id: 'user-admin-1',
-              email: dto.adminEmail,
-              firstName: dto.adminFirstName,
-              lastName: dto.adminLastName,
-            }),
-          },
-          tenantMembership: {
-            create: jest.fn().mockResolvedValue({
-              id: 'membership-1',
-              role: UserRole.OWNER,
-              status: MembershipStatus.ACTIVE,
-            }),
-          },
-          auditLog: {
-            create: jest.fn().mockResolvedValue({ id: 'audit-log-1' }),
-          },
-        });
+        return callback(mockRegisterTx);
       });
       (prisma.session.create as jest.Mock).mockResolvedValue({ id: 'session-1' });
 
